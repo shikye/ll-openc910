@@ -454,10 +454,13 @@ parameter PC_WIDTH = 40;
 //==========================================================
 //             No_op Signal for Low Power
 //==========================================================
-assign ifu_no_op_req = cp0_ifu_no_op_req;
-assign ifu_no_op     = l1_refill_ifctrl_idle && 
-                       !l1_refill_ifctrl_start && 
-                       ipb_ifctrl_prefetch_idle;
+assign ifu_no_op_req = cp0_ifu_no_op_req;         // 强制no_op请求，命令IFU进入低功耗的无操作状态
+
+
+assign ifu_no_op     = l1_refill_ifctrl_idle &&  // 无refill,即没有进行的Cache Miss
+                       !l1_refill_ifctrl_start &&  // 没有新的refill请求
+                       ipb_ifctrl_prefetch_idle;  // prefetch也是空闲
+
 assign ifu_no_op_for_gateclk = l1_refill_ifctrl_idle && 
                                !l1_refill_ifctrl_start_for_gateclk && 
                                ipb_ifctrl_prefetch_idle;
@@ -481,6 +484,8 @@ gated_clk_cell  x_ifu_no_op_updt_clk (
 //           .local_en       (ifu_no_op_updt_clk_en),//Local Condition @47
 //           .module_en      (cp0_ifu_icg_en) @48
 //         ); @49
+
+// 在状态切换时，提供一个脉冲
 assign ifu_no_op_updt_clk_en = ifu_no_op_flop != ifu_no_op_for_gateclk;
 
 always @(posedge ifu_no_op_updt_clk or negedge cpurst_b)
@@ -503,6 +508,8 @@ assign ifu_had_no_op = ifu_yy_xx_no_op;
 //  2.Refill     on : Data from Refill, Data Valid only when trans_cmplt && PC_hit
 //  Refill on Valid When Enter Refill SM && NOT ask Change Flow,Which Means
 //  WFD1-WFD4 or REQ 
+
+// 指示取出的指令数据是否可以被下游使用
 assign if_inst_data_vld = (!l1_refill_ifctrl_refill_on && 
                            !(pcgen_ifctrl_way_pred[1:0] == 2'b0) ) || //not way_pred stall
                           (l1_refill_ifctrl_refill_on && 

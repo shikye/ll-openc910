@@ -253,6 +253,11 @@ parameter PC_WIDTH = 40;
 //==========================================================
 //         Chip Enable to Cache Tag Array
 //==========================================================
+
+// _b通常表示低有效
+// cen_b低有效，在以下任何需要访问Tag Array时，打开SRAM,否则置位省电
+// 有一种情况存在，就会让cen_b为0
+
 //ICache Tag Array is Enable When:
 //  1.Write Enable
 //    a.Icache Invalid Write
@@ -263,32 +268,32 @@ parameter PC_WIDTH = 40;
 //    c.Sequence Read && Data first
 //    d.Vector SM Read
 //    e.Prefetch Read
-assign ifu_icache_tag_cen_b = !(l1_refill_icache_if_wr && 
-                                 (l1_refill_icache_if_first || 
-                                  l1_refill_icache_if_last) && 
+assign ifu_icache_tag_cen_b = !(l1_refill_icache_if_wr &&            // refill写Tag
+                                 (l1_refill_icache_if_first ||       // first - 需要标注该cacheline不再valid，以防止refill过程中被使用
+                                  l1_refill_icache_if_last) &&       // last - 在refill完成时才标注valid
                                 cp0_ifu_icache_en
                                ) &&
-                              !(ifctrl_icache_if_tag_req
+                              !(ifctrl_icache_if_tag_req            // 控制单元写请求
                                ) &&
-                              !(pcgen_icache_if_chgflw &&
+                              !(pcgen_icache_if_chgflw &&                // PC跳转
                                  (pcgen_icache_if_way_pred[1:0] != 2'b00) && 
                                 cp0_ifu_icache_en
                                ) &&
-                              !(pcgen_icache_if_seq_tag_req && //Seq && !Stall
+                              !(pcgen_icache_if_seq_tag_req && //Seq && !Stall     // 顺序取指
                                 cp0_ifu_icache_en
                                ) &&
-                              !(ipb_icache_if_req && 
+                              !(ipb_icache_if_req &&                // Prefetch Buffer需要判断是否已经在缓存中
                                 cp0_ifu_icache_en
                                ) && 
-                              !ifctrl_icache_if_read_req_tag;
+                              !ifctrl_icache_if_read_req_tag; // 控制单元读请求
 //Gate Clk Enable Signal for Memory Gate Clk
-assign ifu_icache_tag_clk_en = ifctrl_icache_if_tag_req || 
-                               ifctrl_icache_if_read_req_tag ||
+assign ifu_icache_tag_clk_en = ifctrl_icache_if_tag_req ||   // 控制单元要写Tag
+                               ifctrl_icache_if_read_req_tag ||   // 控制单元要读Tag
                                cp0_ifu_icache_en && 
                                (
-                                 l1_refill_icache_if_wr || 
-                                 pcgen_icache_if_gateclk_en || 
-                                 ipb_icache_if_req_for_gateclk
+                                 l1_refill_icache_if_wr ||       // 正在做refill
+                                 pcgen_icache_if_gateclk_en ||   // pcgen请求
+                                 ipb_icache_if_req_for_gateclk   // ipb请求
                                );
 
 //==========================================================
@@ -300,16 +305,20 @@ assign ifu_icache_tag_clk_en = ifctrl_icache_if_tag_req ||
 //    a.first cycle data : clear valid bit && fifo bit not change
 //    b.last  cycle data : Set valid bit && fifo bit change
 
+// 三位的写使能信号ifu_icache_tag_wen[2:0]来精确控制对Tag Array中不同部分的写入：
+// [2]：FIFO替换策略位
+// [1:0]：Way1和Way0的Valid位及Tag的写入
+
 //FIFO bit wen
 // &CombBeg; @83
-always @( ifctrl_icache_if_tag_wen[2]
+always @( ifctrl_icache_if_tag_wen[2]     
        or ifctrl_icache_if_inv_on
        or l1_refill_icache_if_wr
        or l1_refill_icache_if_last)
 begin
-if(ifctrl_icache_if_inv_on)
+if(ifctrl_icache_if_inv_on) // 正在进行缓存无效化操作，那么直接由外部信号控制
   ifu_icache_tag_wen[2] = ifctrl_icache_if_tag_wen[2];
-else if(l1_refill_icache_if_wr && l1_refill_icache_if_last)
+else if(l1_refill_icache_if_wr && l1_refill_icache_if_last) // 最后一个周期，写使能开启
   ifu_icache_tag_wen[2] = 1'b0;
 else
   ifu_icache_tag_wen[2] = 1'b1;
@@ -324,10 +333,10 @@ always @( ifctrl_icache_if_inv_on
        or l1_refill_icache_if_last
        or fifo_bit)
 begin
-if(ifctrl_icache_if_inv_on)
+if(ifctrl_icache_if_inv_on) 
   ifu_icache_tag_wen[1:0] = ifctrl_icache_if_tag_wen[1:0];
 else if(l1_refill_icache_if_wr &&
-         (l1_refill_icache_if_first || l1_refill_icache_if_last))
+         (l1_refill_icache_if_first || l1_refill_icache_if_last))    // 第一个和最后一个周期，开启Valid和Tag的写入使能
   ifu_icache_tag_wen[1:0] = {!fifo_bit, fifo_bit};
 else
   ifu_icache_tag_wen[1:0] = 2'b11;
@@ -343,14 +352,18 @@ assign fifo_bit = l1_refill_icache_if_fifo;
 //  1. 1bit FIFO bit      * 1
 //  2. 1bit Valid bit     * 2
 //  3. 20bit Tag Data     * 2
-assign tag_fifo_din     = (ifctrl_icache_if_inv_on) 
+assign tag_fifo_din     = (ifctrl_icache_if_inv_on)  // 直接控制
                           ? ifctrl_icache_if_inv_fifo 
-                          : !fifo_bit;
+                          : !fifo_bit; // 取反
 //Only When refill last, Valid Bit will Be 1
 assign tag_valid_din    = l1_refill_icache_if_last;
+
+// Tag
 assign tag_pc_din[27:0] = (ifctrl_icache_if_inv_on || l1_refill_icache_if_first)
                           ? 28'b0
                           : l1_refill_icache_if_ptag[27:0];
+
+// 拼接{FIFO, Valid, Tag, Valid, Tag} -> ifu_icache_tag_wen[1:0]会作为掩码
 assign ifu_icache_tag_din[58:0] = {tag_fifo_din,
                                    tag_valid_din, tag_pc_din[27:0],
                                    tag_valid_din, tag_pc_din[27:0]
@@ -368,20 +381,20 @@ assign ifu_icache_tag_din[58:0] = {tag_fifo_din,
 //    c.Vector SM Read
 //assign icache_way_pred[1:0] = (l1_refill_icache_if_wr || vector_icache_if_req)
 assign icache_way_pred[1:0] = (l1_refill_icache_if_wr)
-                            ? 2'b11
-                            : pcgen_icache_if_way_pred[1:0];
+                            ? 2'b11  // 在缓存refill时不使用pred,需要根据fifo_bit明确选择一路写入
+                            : pcgen_icache_if_way_pred[1:0];  // 正常读取时，使用来自pcgen的预测值
 assign icache_reset_inv     = ifctrl_icache_if_reset_req;                            
-assign ifu_icache_data_array0_bank0_cen_b = (
-                                             !(l1_refill_icache_if_wr && !fifo_bit
+assign ifu_icache_data_array0_bank0_cen_b = ( // 每个array包含4个bank
+                                             !(l1_refill_icache_if_wr && !fifo_bit      // refill
                                               ) &&
-                                             !(pcgen_icache_if_chgflw_bank0
+                                             !(pcgen_icache_if_chgflw_bank0        // pcgen的chgflw读取
                                               ) &&
-                                             !(pcgen_icache_if_seq_data_req
+                                             !(pcgen_icache_if_seq_data_req       // pcgen的顺序读取
                                               )
-                                              || !(cp0_ifu_icache_en && icache_way_pred[0])
+                                              || !(cp0_ifu_icache_en && icache_way_pred[0]) // 被禁用/路预测没有命中（icache_way_pred[0]=0）
                                             ) && 
-                                            !ifctrl_icache_if_read_req_data0 &&
-                                            !icache_reset_inv;
+                                            !ifctrl_icache_if_read_req_data0 &&   // 来自ifctrl的直接读请求，会关闭DataArray的读使能，其可能使用自己独立的使能逻辑
+                                            !icache_reset_inv;   // 进行全局的缓存复位/无效化
 assign ifu_icache_data_array0_bank1_cen_b = (
                                              !(l1_refill_icache_if_wr && !fifo_bit
                                               ) &&
@@ -463,13 +476,13 @@ assign ifu_icache_data_array1_bank3_cen_b = (
 
 //Gate Clk Enable Signal for Memory Gate Clk
 assign ifu_icache_data_array0_bank0_clk_en = (
-                                              l1_refill_icache_if_wr && !fifo_bit || 
-                                              pcgen_icache_if_chgflw_short || 
+                                              l1_refill_icache_if_wr && !fifo_bit ||     // refill
+                                              pcgen_icache_if_chgflw_short ||            // pcgen的读取
                                               pcgen_icache_if_seq_data_req_short 
                                              ) && 
-                                             cp0_ifu_icache_en || 
-                                             ifctrl_icache_if_read_req_data0 ||
-                                             icache_reset_inv;
+                                             cp0_ifu_icache_en ||                        
+                                             ifctrl_icache_if_read_req_data0 ||          // 控制单元的直接读请求
+                                             icache_reset_inv;                           // 复位
 assign ifu_icache_data_array0_bank1_clk_en = (
                                               l1_refill_icache_if_wr && !fifo_bit || 
                                               pcgen_icache_if_chgflw_short || 
@@ -601,6 +614,8 @@ assign ifu_icache_predecd_array1_din[31:0] = (icache_reset_inv) ? 32'b0 : l1_ref
 //==========================================================
 //                   Index to Icache
 //==========================================================
+// 写/复位 > refill > IPB > 控制单元读 > 普通取指
+
 //Index to Icache Tag Array
 //  1.INV Index
 //  2.Vector Index
@@ -613,7 +628,7 @@ assign ifu_icache_predecd_array1_din[31:0] = (icache_reset_inv) ? 32'b0 : l1_ref
 
 //Using & | logic to save timing 
 //for four condition will not set at the same time
-assign ifu_icache_index[15:0] = (icache_req_higher)
+assign ifu_icache_index[15:0] = (icache_req_higher)     // 高优先级请求标志
                               ? icache_index_higher[15:0]
                               : pcgen_icache_if_index[15:0];
 assign icache_req_higher      = ifctrl_icache_if_tag_req || 
@@ -627,7 +642,7 @@ assign icache_req_higher      = ifctrl_icache_if_tag_req ||
 
 //Icache read can from
 //1. icache read data/tag request
-//2. icache refill write request
+//2. icache refill write request  -- refill时需要读取fifo以决定写入哪个Way
 //3. ipb read request(for tag compare)
 //4. icache read tag request for inv va/pa
 assign icache_read_req = ifctrl_icache_if_read_req_data0 ||
@@ -645,10 +660,10 @@ always @( l1_refill_icache_if_index[15:0]
        or ifctrl_icache_if_index[15:0])
 begin
 case(icache_index_sel[3:0])
-  4'b1000: icache_index_higher[15:0] = ifctrl_icache_if_index[15:0];
-  4'b0100: icache_index_higher[15:0] = l1_refill_icache_if_index[15:0];
-  4'b0010: icache_index_higher[15:0] = {ipb_icache_if_index[10:0],5'b0};
-  4'b0001: icache_index_higher[15:0] = ifctrl_icache_if_read_req_index[15:0];
+  4'b1000: icache_index_higher[15:0] = ifctrl_icache_if_index[15:0];         // 写或复位
+  4'b0100: icache_index_higher[15:0] = l1_refill_icache_if_index[15:0];      // refill
+  4'b0010: icache_index_higher[15:0] = {ipb_icache_if_index[10:0],5'b0};     // IPB
+  4'b0001: icache_index_higher[15:0] = ifctrl_icache_if_read_req_index[15:0];// 控制单元的读
   default: icache_index_higher[15:0] = {16{1'bx}};
 endcase 
 // &CombEnd; @437
@@ -694,6 +709,9 @@ assign icache_if_ipb_tag_data1[28:0] = icache_ifu_tag_dout[57:29];
 //==========================================================
 //               Interactive with PMU
 //==========================================================
+// Performance Monitoring Unit
+// 时间检测、时钟门控、事件锁存
+
 assign ifu_hpcp_icache_access_pre         = (pcgen_icache_if_seq_data_req || pcgen_icache_if_chgflw)&& cp0_ifu_icache_en;
 //     ifu_hpcp_icache_miss_pre   
 
