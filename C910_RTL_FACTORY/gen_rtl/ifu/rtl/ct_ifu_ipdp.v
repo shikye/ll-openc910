@@ -5622,6 +5622,8 @@ assign ipdp_l0_btb_ras_push             = !ipctrl_ipdp_pipe_cancel
 //==========================================================
 //                  H0 Update Logic
 //==========================================================
+// h0是从h1到h8中出来的第一条准备继续向后传递的指令
+
 //H0 update under following rule:
 //if higher chgflw flush or ip stage chgflw happens
 //  h0_vld <= 0

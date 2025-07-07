@@ -19,6 +19,10 @@ module ct_ifu_precode(
   pre_code
 );
 
+// 将128位看作8个连续的16bit半字
+// 为每个半字生成4位的预解码信息
+// bry是空间换时间的并行处理
+
 // &Ports; @23
 input   [127:0]  inst_data;  
 output  [31 :0]  pre_code;   
@@ -26,10 +30,10 @@ output  [31 :0]  pre_code;
 // &Regs; @24
 
 // &Wires; @25
-wire             h1_ab_br;   
-wire             h1_br;      
-wire             h1_bry0;    
-wire             h1_bry1;    
+wire             h1_ab_br;   // 是否是一条无跳转指令
+wire             h1_br;      // 是否是一条分支指令
+wire             h1_bry0;    // 假设指令流并非从h1_data开始
+wire             h1_bry1;    // 假设指令流从h1_data的起始处开始，计算出指令边界信息
 wire             h1_bry1_32; 
 wire    [15 :0]  h1_data;    
 wire    [3  :0]  h1_pre_code; 
@@ -127,7 +131,7 @@ assign h6_data[15:0] = inst_data[ 47: 32];
 assign h7_data[15:0] = inst_data[ 31: 16];
 assign h8_data[15:0] = inst_data[ 15:  0];
 
-//hn_br
+//hn_br - 识别是否是branch或jal
 assign h1_br = (h1_data[6:0] == 7'b1101111) || //jal
                ({h1_data[14:12],h1_data[6:0]} == 10'b000_1100011) || //beq
                ({h1_data[14:12],h1_data[6:0]} == 10'b001_1100011) || //bne
@@ -208,7 +212,7 @@ assign h8_br = (h8_data[6:0] == 7'b1101111) || //jal
                ({h8_data[15:14],h8_data[1:0]} == 4'b1101) || //c.beqz/c.bnez
                ({h8_data[15:13],h8_data[1:0]} == 5'b10101); //c.j 
 
-//hn_ab_br
+//hn_ab_br - 识别是否是jal
 assign h1_ab_br = (h1_data[6:0] == 7'b1101111) || //jal
                   ({h1_data[15:13],h1_data[1:0]} == 5'b10101); //c.j 
 
@@ -233,12 +237,15 @@ assign h7_ab_br = (h7_data[6:0] == 7'b1101111) || //jal
 assign h8_ab_br = (h8_data[6:0] == 7'b1101111) || //jal
                   ({h8_data[15:13],h8_data[1:0]} == 5'b10101); //c.j 
 
-//hn_bry1 : suppose h1 is the start of one inst
-assign h1_bry1_32 = (h1_data[1:0] == 2'b11);
+
+// 32位指令的编码，最低两位是11
+// 16位编码最低两位不是11
+//hn_bry1 : suppose h1 is the start of one inst -> 假设这是第一条指令的有效指令边界
+assign h1_bry1_32 = (h1_data[1:0] == 2'b11); // h1是32位的低半部分
 assign h1_bry1    = 1'b1;
 
-assign h2_bry1_32 = (h2_data[1:0] == 2'b11) && !h1_bry1_32;
-assign h2_bry1_16 = !(h2_data[1:0] == 2'b11) && !h1_bry1_32;
+assign h2_bry1_32 = (h2_data[1:0] == 2'b11) && !h1_bry1_32; // h2是32位的低半部分，即起始
+assign h2_bry1_16 = !(h2_data[1:0] == 2'b11) && !h1_bry1_32; // h2是16位指令的起始
 assign h2_bry1    = h2_bry1_32 || h2_bry1_16;
 
 assign h3_bry1_32 = (h3_data[1:0] == 2'b11) && !h2_bry1_32;
@@ -266,10 +273,10 @@ assign h8_bry1_16 = !(h8_data[1:0] == 2'b11) && !h7_bry1_32;
 assign h8_bry1    = h8_bry1_32 || h8_bry1_16;
 
 //hn_bry0 : suppose h1 is not the start of one inst
-assign h1_bry0    = 1'b0;
+assign h1_bry0    = 1'b0; // 假设h1不是第一条指令的起始，那么其一定是32位指令的高半部分
 
 assign h2_bry0_32 = (h2_data[1:0] == 2'b11);
-assign h2_bry0    = 1'b1;
+assign h2_bry0    = 1'b1; // h2一定是起始
 
 assign h3_bry0_32 = (h3_data[1:0] == 2'b11) && !h2_bry0_32;
 assign h3_bry0_16 = !(h3_data[1:0] == 2'b11) && !h2_bry0_32;

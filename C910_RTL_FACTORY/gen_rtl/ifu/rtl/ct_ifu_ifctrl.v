@@ -504,17 +504,18 @@ assign ifu_had_no_op = ifu_yy_xx_no_op;
 //             IF Stage Data Valid Signal
 //==========================================================
 //IF Stage Data Will Be Valid :
-//  1.Refill not on : Data from L1 ICache, Data Valid When not way_pred_close
-//  2.Refill     on : Data from Refill, Data Valid only when trans_cmplt && PC_hit
-//  Refill on Valid When Enter Refill SM && NOT ask Change Flow,Which Means
+//  1.Refill not on : Data from L1 ICache, Data Valid When not way_pred_close - way_pred_close表示路预测失败。只有路预测没有暂停时，从Icache中读出的数据才是有效的
+//  2.Refill     on : Data from Refill, Data Valid only when trans_cmplt && PC_hit - trans_cmplt即整个缓存行的数据已经从内存完整传输，PC_hit即刚刚传输完成的数据必须是Pipeline正在等待的那条指令
+//  Refill on Valid When Enter Refill SM && NOT ask Change Flow,Which Means -> 当因为一次普通的顺序读取而进入refill时，Refill on状态才有效
 //  WFD1-WFD4 or REQ 
 
 // 指示取出的指令数据是否可以被下游使用
-assign if_inst_data_vld = (!l1_refill_ifctrl_refill_on && 
-                           !(pcgen_ifctrl_way_pred[1:0] == 2'b0) ) || //not way_pred stall
-                          (l1_refill_ifctrl_refill_on && 
+assign if_inst_data_vld = (!l1_refill_ifctrl_refill_on &&             // refill not on
+                           !(pcgen_ifctrl_way_pred[1:0] == 2'b0) ) || // way_pred为2‘b00表示路预测暂停
+                          (l1_refill_ifctrl_refill_on &&              // refill on
                            l1_refill_ifctrl_trans_cmplt && 
                            refill_pc_hit);
+
 assign refill_pc_hit = (pcgen_ifctrl_pc[PC_WIDTH-2:3] == l1_refill_ifctrl_pc[PC_WIDTH-2:3]);
 
 //==========================================================
@@ -524,27 +525,28 @@ assign refill_pc_hit = (pcgen_ifctrl_pc[PC_WIDTH-2:3] == l1_refill_ifctrl_pc[PC_
 //  1.MMU Trans success
 //  2.MMU Trans expt
 //  3.!ifu_no_op_req(in case of invalid inst fetch affect no_op)
-assign if_pc_vld       = mmu_ifu_pavld && 
-                         !ifu_no_op_req;
+assign if_pc_vld       = mmu_ifu_pavld &&  // 物理地址有效 - 表示虚拟地址到物理地址的转换已经完成，没有触发缺页等异常
+                         !ifu_no_op_req;   // 没有要求IFU停止工作
 
 //==========================================================
 //             IF Stage Cancel Signal
 //==========================================================
-assign if_cancel = pcgen_ifctrl_cancel;
+assign if_cancel = pcgen_ifctrl_cancel; // pcgen检测到分支预测错误时，会发出pcgen_ifctrl_cancel信号;下游模块接受到cancel后，会当作bubble处理丢弃
 assign ifctrl_ifdp_cancel = if_cancel;
 
 //==========================================================
 //             IF Stage Self_Stall Signal
 //==========================================================
 //IF Stage Self Stall is actually if_pcgen_stall
+
 //IF Stage Self Stall will make if stage not valid and stall pcgen
-//  1.Refill_on && !(trans_cmplt && PC_hit)
-//  2.!pc_vld, which means MMU is Refilling
-//  3.l1_icache_inv on
-//  4.BHT_inv on
-//  5.BTB_inv on,which contains BTB & Ind-BTB
+//  1.Refill_on && !(trans_cmplt && PC_hit) - 缓存未命中，且refill尚未完成
+//  2.!pc_vld, which means MMU is Refilling - pc无效，即MMU遇到问题
+//  3.l1_icache_inv on - 正在执行Icache无效化操作
+//  4.BHT_inv on - 正在执行BHT无效化操作
+//  5.BTB_inv on,which contains BTB & Ind-BTB - 正在执行BTB无效化操作
 //  6.Vector_SM on
-//  7.Way Predict = 2'b00, Which Means
+//  7.Way Predict = 2'b00, Which Means - 路预测暂停，即尚未确定或预测失败
 //  8.Rtu_yy_xx_dbgon
 assign if_self_stall = (l1_refill_ifctrl_refill_on && 
                         !(l1_refill_ifctrl_trans_cmplt && refill_pc_hit)) ||
@@ -556,7 +558,8 @@ assign if_self_stall = (l1_refill_ifctrl_refill_on &&
                        vector_ifctrl_sm_on ||
                        pcgen_ifctrl_way_pred_stall || 
                        rtu_ifu_xx_dbgon;
-assign if_stage_stall      = if_self_stall || ipctrl_ifctrl_stall;
+                      
+assign if_stage_stall      = if_self_stall || ipctrl_ifctrl_stall; // 自身暂停+下游反压
 assign ifctrl_pcgen_stall  = if_stage_stall;
 assign ifctrl_bht_stall    = if_stage_stall;
 assign ifctrl_ifdp_stall   = if_stage_stall;
@@ -567,14 +570,16 @@ assign ifctrl_pcgen_stall_short = if_self_stall || ipctrl_ifctrl_stall_short;
 //==========================================================
 //             IF Stage Valid Signal
 //==========================================================
+// 通知下级，该级有效
+
 //IF Stage Valid when
 //  1.if_inst_data_vld &&
 //  2.if_pc_vld &&
 //  3.!if_cancel &&
 //  4.!if_self_stall
-assign if_vld = if_inst_data_vld &&
-                if_pc_vld &&
-                !if_cancel &&
+assign if_vld = if_inst_data_vld && // Cache命中或refill完成
+                if_pc_vld && // MMU成功
+                !if_cancel && // 没有因为分支预测等原因冲刷
                 !if_self_stall;
 
 assign if_vld_for_gateclk = if_inst_data_vld &&
@@ -623,12 +628,14 @@ end
 //==========================================================
 //             IF Stage Pipedown Signal
 //==========================================================
+// 推进信号
+
 //IF Stage Data Will Pipedown When
 //  1.!ip_if_Stall
 //  2.if_vld
 //  3.!pcgen_ifctrl_pipe_cancel(Only affect valid)
-assign ifctrl_ifdp_pipedown = !ipctrl_ifctrl_stall &&
-                              if_vld;
+assign ifctrl_ifdp_pipedown = !ipctrl_ifctrl_stall && // 下游没有反压
+                              if_vld; // 本级有效
 // &Force("output","ifctrl_ifdp_pipedown");                             @185
 assign ifctrl_bht_pipedown = !ipctrl_ifctrl_bht_stall;
 
@@ -673,6 +680,8 @@ end
 //==========================================================
 //             IF Stage PC reissue
 //==========================================================
+// pcgen重新以当前PC再次发出取指请求 - 事件处理完成后通过reissue来唤醒流水线
+
 //IF Stage PC Reissue When
 //  1.Cache Refill Done
 //  2.Cache INV Done
@@ -717,12 +726,14 @@ end
 //==========================================================
 //             IF Stage PCload
 //==========================================================
-assign ifctrl_pcload                = l0_btb_ifctrl_chglfw_vld 
-                                   && !ipctrl_ifctrl_stall
-                                   && !ifctrl_pcgen_reissue_pcload
-                                   && if_inst_data_vld
+// 处理chglfw - 将一个新的目标地址加载到程序计数器中
+
+assign ifctrl_pcload                = l0_btb_ifctrl_chglfw_vld  // 分支预测器发出有效请求
+                                   && !ipctrl_ifctrl_stall // 下游未stall
+                                   && !ifctrl_pcgen_reissue_pcload // 没有正在进行的reissue
+                                   && if_inst_data_vld // 当前数据有效，即触发这次分支预测的分支指令本身已经成功获取了
 //                                   && if_pc_vld
-                                   && !if_self_stall;
+                                   && !if_self_stall; // if阶段自身没有暂停
                                    
 assign ifctrl_pcgen_chgflw_no_stall_mask = l0_btb_ifctrl_chglfw_vld
                                         && !ifctrl_pcgen_reissue_pcload
@@ -751,11 +762,14 @@ end
 //==========================================================
 //                    ICACHE INV SM
 //==========================================================
+// INS - Invalid by Address
 
 parameter IDLE        = 4'b0000;
+
 parameter READ_REQ    = 4'b0010;
 parameter READ_RD     = 4'b0011;
 parameter READ_ST     = 4'b0100;
+
 parameter INV_ALL     = 4'b0101;
 parameter INS_TAG_REQ = 4'b1001;
 parameter INS_TAG_RD  = 4'b1010;
@@ -841,7 +855,7 @@ INV_ALL     : if(icache_all_inv_done)
               else
               icache_inv_next_state[3:0] = INV_ALL;
 //Because VIPT icache
-//the same PA may occur in different icache line
+//the same PA may occur in different icache line  -  需要遍历所有可能别名的Cacheline
 //Thus should ergodic 4/8 icache line in 32K/64K icache 
 INS_TAG_REQ : icache_inv_next_state[3:0] = INS_TAG_RD;
 INS_TAG_RD  : icache_inv_next_state[3:0] = INS_CMP;
@@ -1177,6 +1191,8 @@ assign ifctrl_ipb_inv_on = ifctrl_l1_refill_inv_on;
 //==========================================================
 //            The invalidation of BTB
 //==========================================================
+// 例如进程切换等时机需要无效化分支预测器缓冲
+
 //The BTB invalidation signal is level signal, which should 
 //be transfered to pulse signal
 //Gate Clk                    
@@ -1226,6 +1242,17 @@ assign ifu_cp0_btb_inv_done = btb_inv_dn &&
                               !btb_inv_dn_ff;
 // &Force("input","cp0_ifu_btb_inv"); @745
 
+always @(posedge ibp_inv_flop_clk or negedge cpurst_b)
+begin
+  if(!cpurst_b)
+    ind_btb_inv_dn_ff <= 1'b1;
+  else
+    ind_btb_inv_dn_ff <= ind_btb_inv_dn;
+end
+assign ind_btb_inv_on = ind_btb_ifctrl_inv_on;
+assign ind_btb_inv_dn = ind_btb_ifctrl_inv_done;
+assign ifu_cp0_ind_btb_inv_done = ind_btb_inv_dn && 
+                                 !ind_btb_inv_dn_ff;
 //==========================================================
 //            The invalidation of BHT
 //==========================================================
@@ -1235,6 +1262,17 @@ assign ifu_cp0_btb_inv_done = btb_inv_dn &&
 // &Instance("gated_clk_cell","x_bht_inv_flop_clk"); @754
 gated_clk_cell  x_bht_inv_flop_clk (
   .clk_in              (forever_cpuclk     ),
+always @(posedge ibp_inv_flop_clk or negedge cpurst_b)
+begin
+  if(!cpurst_b)
+    ind_btb_inv_dn_ff <= 1'b1;
+  else
+    ind_btb_inv_dn_ff <= ind_btb_inv_dn;
+end
+assign ind_btb_inv_on = ind_btb_ifctrl_inv_on;
+assign ind_btb_inv_dn = ind_btb_ifctrl_inv_done;
+assign ifu_cp0_ind_btb_inv_done = ind_btb_inv_dn && 
+                                 !ind_btb_inv_dn_ff;
   .clk_out             (bht_inv_flop_clk   ),
   .external_en         (1'b0               ),
   .global_en           (cp0_yy_clk_en      ),

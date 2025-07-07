@@ -870,7 +870,7 @@ assign ifdp_clk_en = ipctrl_ifdp_gateclk_en;
 //  1.L1 ICache 
 //  2.Prefetch Buffer
 //  3.Off Chip Memory
-//Way0 Data can be from cache or refill
+//Way0 Data can be from cache or refill - 只是用ifdp_inst_data0连接到refill的接口，作为一个统一使用的接口而已
 assign ifdp_inst_data0[127:0] = (l1_refill_ifdp_refill_on)
                               ? l1_refill_ifdp_inst_data[127:0]
                               : icache_if_ifdp_inst_data0[127:0];
@@ -1197,7 +1197,7 @@ always @(posedge ifdp_clk or negedge cpurst_b)
 begin
   if(!cpurst_b)
     ifdp_ipctrl_way_pred[1:0] <= 2'b0;
-  else if(ifctrl_ifdp_pipedown)
+  else if(ifctrl_ifdp_pipedown) // 传递路预测信息 - 在IF阶段，Icache根据pred访问了某个Way,而在IP阶段，需要知道访问了哪个way
     ifdp_ipctrl_way_pred[1:0] <= pcgen_ifdp_way_pred[1:0];
   else
     ifdp_ipctrl_way_pred[1:0] <= ifdp_ipctrl_way_pred[1:0];
@@ -1212,7 +1212,7 @@ always @(posedge ifdp_clk or negedge cpurst_b)
 begin
   if(!cpurst_b)
     ifdp_ipctrl_refill_on <= 1'b0;
-  else if(ifctrl_ifdp_pipedown)
+  else if(ifctrl_ifdp_pipedown) // 表示当前传递给IP的数据是否来自refill
     ifdp_ipctrl_refill_on <= l1_refill_ifdp_refill_on;
   else
     ifdp_ipctrl_refill_on <= ifdp_ipctrl_refill_on;
@@ -1223,7 +1223,7 @@ end
 //==========================================================
 //Tag[28] is the Valid Bit
 //Tag[27:0] is Physical Tag(VIPT)
-//For Timing consider, Tag compare split to four part
+//For Timing consider, Tag compare split to four part - 空间换时间
 //Way0 Data can be from cache or refill
 assign ifdp_icache_way0_28_24_hit = (l1_refill_ifdp_refill_on)
                                   ? refill_tag_28_24_hit
@@ -1244,7 +1244,78 @@ assign ifdp_icache_way0_23_16_hit = (l1_refill_ifdp_refill_on)
                                   : icache_tag_way0_23_16_hit;
 assign refill_tag_23_16_hit       = (l1_refill_ifdp_tag_data[23:16]  == mmu_ifu_pa[23:16]);
 assign icache_tag_way0_23_16_hit  = (icache_if_ifdp_tag_data0[23:16] == mmu_ifu_pa[23:16]);
-//Way1 Data can be only from cache
+//Way1 Data can be only from cache8_hit;
+    ifdp_ipctrl_way1_7_0_hit   <= ifdp_ipctrl_way1_7_0_hit;
+  end
+end
+// &Force("output", "ifdp_ipctrl_way0_28_24_hit"); @586
+// &Force("output", "ifdp_ipctrl_way0_23_16_hit"); @587
+// &Force("output", "ifdp_ipctrl_way0_15_8_hit"); @588
+// &Force("output", "ifdp_ipctrl_way0_7_0_hit"); @589
+// &Force("output", "ifdp_ipctrl_way1_28_24_hit"); @590
+// &Force("output", "ifdp_ipctrl_way1_23_16_hit"); @591
+// &Force("output", "ifdp_ipctrl_way1_15_8_hit"); @592
+// &Force("output", "ifdp_ipctrl_way1_7_0_hit"); @593
+
+//way 0 fanout is too big, it will insert buffer,which
+//will have side effect on timing,so we will duplicate it 
+//for timing critical path use
+always @(posedge ifdp_clk or negedge cpurst_b)
+begin
+  if(!cpurst_b) begin
+    ifdp_ipctrl_way0_28_24_hit_dup <= 1'b0;
+    ifdp_ipctrl_way0_23_16_hit_dup <= 1'b0;
+    ifdp_ipctrl_way0_15_8_hit_dup  <= 1'b0;
+    ifdp_ipctrl_way0_7_0_hit_dup   <= 1'b0;
+  end
+  else if(ifctrl_ifdp_pipedown) begin
+    ifdp_ipctrl_way0_28_24_hit_dup <= ifdp_icache_way0_28_24_hit;
+    ifdp_ipctrl_way0_23_16_hit_dup <= ifdp_icache_way0_23_16_hit;
+    ifdp_ipctrl_way0_15_8_hit_dup  <= ifdp_icache_way0_15_8_hit;
+    ifdp_ipctrl_way0_7_0_hit_dup   <= ifdp_icache_way0_7_0_hit;
+  end
+  else begin
+    ifdp_ipctrl_way0_28_24_hit_dup <= ifdp_ipctrl_way0_28_24_hit_dup;
+    ifdp_ipctrl_way0_23_16_hit_dup <= ifdp_ipctrl_way0_23_16_hit_dup;
+    ifdp_ipctrl_way0_15_8_hit_dup  <= ifdp_ipctrl_way0_15_8_hit_dup;
+    ifdp_ipctrl_way0_7_0_hit_dup   <= ifdp_ipctrl_way0_7_0_hit_dup;
+  end
+end
+// &Force("output", "ifdp_ipctrl_way0_28_24_hit_dup"); @619
+// &Force("output", "ifdp_ipctrl_way0_23_16_hit_dup"); @620
+// &Force("output", "ifdp_ipctrl_way0_15_8_hit_dup"); @621
+// &Force("output", "ifdp_ipctrl_way0_7_0_hit_dup"); @622
+
+// &Force("output", "ifdp_ipctrl_way0_29_24_parity"); @658
+// &Force("output", "ifdp_ipctrl_way0_23_16_parity"); @659
+// &Force("output", "ifdp_ipctrl_way0_15_8_parity"); @660
+// &Force("output", "ifdp_ipctrl_way0_7_0_parity"); @661
+// &Force("output", "ifdp_ipctrl_way1_29_24_parity"); @662
+// &Force("output", "ifdp_ipctrl_way1_23_16_parity"); @663
+// &Force("output", "ifdp_ipctrl_way1_15_8_parity"); @664
+// &Force("output", "ifdp_ipctrl_way1_7_0_parity"); @665
+
+always @(posedge ifdp_clk or negedge cpurst_b)
+begin
+  if(!cpurst_b)
+    ifdp_ipctrl_fifo <= 1'b0;
+  else if(ifctrl_ifdp_pipedown)
+    ifdp_ipctrl_fifo <= ifdp_fifo_bit;
+  else
+    ifdp_ipctrl_fifo <= ifdp_ipctrl_fifo;
+end
+// &Force("output", "ifdp_ipctrl_fifo"); @678
+
+always @(posedge ifdp_clk or negedge cpurst_b)
+begin
+  if(!cpurst_b)
+    ifdp_l1_refill_fifo <= 1'b0;
+  else if(ifctrl_ifdp_pipedown)
+    ifdp_l1_refill_fifo <= ifdp_fifo_bit;
+  else
+    ifdp_l1_refill_fifo <= ifdp_l1_refill_fifo;
+end
+// &Force("output", "ifdp_l1_refill_fifo"); @690
 assign ifdp_icache_way1_23_16_hit = (l1_refill_ifdp_refill_on)
                                   ? 1'b0
                                   : icache_tag_way1_23_16_hit;
